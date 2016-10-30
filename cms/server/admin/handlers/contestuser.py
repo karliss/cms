@@ -8,6 +8,8 @@
 # Copyright © 2012-2014 Luca Wehrstedt <luca.wehrstedt@gmail.com>
 # Copyright © 2014 Artem Iglikov <artem.iglikov@gmail.com>
 # Copyright © 2014 Fabian Gundlach <320pointsguy@gmail.com>
+# Copyright © 2015 William Di Luigi <williamdiluigi@gmail.com>
+# Copyright © 2016 Myungwoo Chun <mc.tamaki@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -34,10 +36,10 @@ import logging
 
 import tornado.web
 
-from cms.db import Contest, Message, Participation, Submission, User
+from cms.db import Contest, Message, Participation, Submission, User, Team
 from cmscommon.datetime import make_datetime
 
-from .base import BaseHandler
+from .base import BaseHandler, require_permission
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,7 @@ logger = logging.getLogger(__name__)
 class ContestUsersHandler(BaseHandler):
     REMOVE_FROM_CONTEST = "Remove from contest"
 
+    @require_permission(BaseHandler.AUTHENTICATED)
     def get(self, contest_id):
         self.contest = self.safe_get_item(Contest, contest_id)
 
@@ -60,6 +63,7 @@ class ContestUsersHandler(BaseHandler):
                 .all()
         self.render("contest_users.html", **self.r_params)
 
+    @require_permission(BaseHandler.PERMISSION_ALL)
     def post(self, contest_id):
         fallback_page = "/contest/%s/users" % contest_id
 
@@ -96,6 +100,7 @@ class ContestUsersHandler(BaseHandler):
 
 
 class AddContestUserHandler(BaseHandler):
+    @require_permission(BaseHandler.PERMISSION_ALL)
     def post(self, contest_id):
         fallback_page = "/contest/%s/users" % contest_id
 
@@ -129,6 +134,7 @@ class ParticipationHandler(BaseHandler):
     questions, messages (and allows to send the latters).
 
     """
+    @require_permission(BaseHandler.AUTHENTICATED)
     def get(self, contest_id, user_id):
         self.contest = self.safe_get_item(Contest, contest_id)
         participation = self.sql_session.query(Participation)\
@@ -147,8 +153,10 @@ class ParticipationHandler(BaseHandler):
 
         self.r_params["participation"] = participation
         self.r_params["selected_user"] = participation.user
+        self.r_params["teams"] = self.sql_session.query(Team).all()
         self.render("participation.html", **self.r_params)
 
+    @require_permission(BaseHandler.PERMISSION_ALL)
     def post(self, contest_id, user_id):
         fallback_page = "/contest/%s/user/%s" % (contest_id, user_id)
 
@@ -171,9 +179,17 @@ class ParticipationHandler(BaseHandler):
             self.get_timedelta_sec(attrs, "delay_time")
             self.get_timedelta_sec(attrs, "extra_time")
             self.get_bool(attrs, "hidden")
+            self.get_bool(attrs, "unrestricted")
 
             # Update the participation.
             participation.set_attrs(attrs)
+
+            # Update the team
+            self.get_string(attrs, "team")
+            team = self.sql_session.query(Team)\
+                       .filter(Team.code == attrs["team"])\
+                       .first()
+            participation.team = team
 
         except Exception as error:
             self.application.service.add_notification(
@@ -192,6 +208,7 @@ class MessageHandler(BaseHandler):
 
     """
 
+    @require_permission(BaseHandler.PERMISSION_MESSAGING)
     def post(self, contest_id, user_id):
         user = self.safe_get_item(User, user_id)
         self.contest = self.safe_get_item(Contest, contest_id)

@@ -3,13 +3,14 @@
 
 # Contest Management System - http://cms-dev.github.io/
 # Copyright © 2010-2014 Giovanni Mascellani <mascellani@poisson.phc.unipi.it>
-# Copyright © 2010-2015 Stefano Maggiolo <s.maggiolo@gmail.com>
+# Copyright © 2010-2016 Stefano Maggiolo <s.maggiolo@gmail.com>
 # Copyright © 2010-2012 Matteo Boscariol <boscarim@hotmail.com>
-# Copyright © 2012-2014 Luca Wehrstedt <luca.wehrstedt@gmail.com>
+# Copyright © 2012-2016 Luca Wehrstedt <luca.wehrstedt@gmail.com>
 # Copyright © 2013 Bernard Blackham <bernard@largestprime.net>
 # Copyright © 2014 Artem Iglikov <artem.iglikov@gmail.com>
 # Copyright © 2014 Fabian Gundlach <320pointsguy@gmail.com>
 # Copyright © 2015 William Di Luigi <williamdiluigi@gmail.com>
+# Copyright © 2016 Myungwoo Chun <mc.tamaki@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -43,6 +44,7 @@ from urllib import quote
 import tornado.web
 
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from cms import config, filename_to_language
 from cms.db import File, Submission, SubmissionResult, Task, Token
@@ -69,7 +71,6 @@ class SubmitHandler(BaseHandler):
     @actual_phase_required(0)
     def post(self, task_name):
         participation = self.current_user
-
         try:
             task = self.contest.get_task(task_name)
         except KeyError:
@@ -87,7 +88,8 @@ class SubmitHandler(BaseHandler):
                     .filter(Task.contest == contest)\
                     .filter(Submission.participation == participation)\
                     .scalar()
-                if submission_c >= contest.max_submission_number:
+                if submission_c >= contest.max_submission_number and \
+                        not self.current_user.unrestricted:
                     raise ValueError(
                         self._("You have reached the maximum limit of "
                                "at most %d submissions among all tasks.") %
@@ -98,7 +100,8 @@ class SubmitHandler(BaseHandler):
                     .filter(Submission.task == task)\
                     .filter(Submission.participation == participation)\
                     .scalar()
-                if submission_t >= task.max_submission_number:
+                if submission_t >= task.max_submission_number and \
+                        not self.current_user.unrestricted:
                     raise ValueError(
                         self._("You have reached the maximum limit of "
                                "at most %d submissions on this task.") %
@@ -124,7 +127,8 @@ class SubmitHandler(BaseHandler):
                     .first()
                 if last_submission_c is not None and \
                         self.timestamp - last_submission_c.timestamp < \
-                        contest.min_submission_interval:
+                        contest.min_submission_interval and \
+                        not self.current_user.unrestricted:
                     raise ValueError(
                         self._("Among all tasks, you can submit again "
                                "after %d seconds from last submission.") %
@@ -140,7 +144,8 @@ class SubmitHandler(BaseHandler):
             if task.min_submission_interval is not None:
                 if last_submission_t is not None and \
                         self.timestamp - last_submission_t.timestamp < \
-                        task.min_submission_interval:
+                        task.min_submission_interval and \
+                        not self.current_user.unrestricted:
                     raise ValueError(
                         self._("For this task, you can submit again "
                                "after %d seconds from last submission.") %
@@ -261,7 +266,7 @@ class SubmitHandler(BaseHandler):
                     break
                 elif lang not in contest.languages:
                     error = self._(
-                        "Language %s not allowed in this contest." % lang)
+                        "Language %s not allowed in this contest.") % lang
                     break
                 else:
                     submission_lang = lang
@@ -382,6 +387,8 @@ class TaskSubmissionsHandler(BaseHandler):
         submissions = self.sql_session.query(Submission)\
             .filter(Submission.participation == participation)\
             .filter(Submission.task == task)\
+            .options(joinedload(Submission.token))\
+            .options(joinedload(Submission.results))\
             .all()
 
         submissions_left_contest = None
@@ -462,17 +469,22 @@ class SubmissionStatusHandler(BaseHandler):
                 self._("Evaluated"), self._("details"))
 
             score_type = get_score_type(dataset=task.active_dataset)
-            if score_type is not None and score_type.max_public_score != 0:
-                data["max_public_score"] = "%g" % \
+            if score_type.max_public_score > 0:
+                data["max_public_score"] = \
                     round(score_type.max_public_score, task.score_precision)
-            data["public_score"] = "%g" % \
-                round(sr.public_score, task.score_precision)
+                data["public_score"] = \
+                    round(sr.public_score, task.score_precision)
+                data["public_score_message"] = score_type.format_score(
+                    sr.public_score, score_type.max_public_score,
+                    sr.public_score_details, task.score_precision, self._)
             if submission.token is not None:
-                if score_type is not None and score_type.max_score != 0:
-                    data["max_score"] = "%g" % \
-                        round(score_type.max_score, task.score_precision)
-                data["score"] = "%g" % \
+                data["max_score"] = \
+                    round(score_type.max_score, task.score_precision)
+                data["score"] = \
                     round(sr.score, task.score_precision)
+                data["score_message"] = score_type.format_score(
+                    sr.score, score_type.max_score,
+                    sr.score_details, task.score_precision, self._)
 
         self.write(data)
 
@@ -602,9 +614,7 @@ class UseTokenHandler(BaseHandler):
         # Don't trust the user, check again if (s)he can really play
         # the token.
         tokens_available = self.contest.tokens_available(
-            participation.user.username,
-            task.name,
-            self.timestamp)
+            participation, task, self.timestamp)
         if tokens_available[0] == 0 or tokens_available[2] is not None:
             logger.warning("User %s tried to play a token when they "
                            "shouldn't.", participation.user.username)

@@ -3,11 +3,13 @@
 
 # Contest Management System - http://cms-dev.github.io/
 # Copyright © 2010-2013 Giovanni Mascellani <mascellani@poisson.phc.unipi.it>
-# Copyright © 2010-2014 Stefano Maggiolo <s.maggiolo@gmail.com>
+# Copyright © 2010-2016 Stefano Maggiolo <s.maggiolo@gmail.com>
 # Copyright © 2010-2012 Matteo Boscariol <boscarim@hotmail.com>
 # Copyright © 2013 Luca Wehrstedt <luca.wehrstedt@gmail.com>
 # Copyright © 2014 Artem Iglikov <artem.iglikov@gmail.com>
 # Copyright © 2015 William Di Luigi <williamdiluigi@gmail.com>
+# Copyright © 2016 Myungwoo Chun <mc.tamaki@gmail.com>
+# Copyright © 2016 Masaki Hara <ackie.h.gmai@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -31,6 +33,8 @@ from __future__ import print_function
 # setuptools doesn't seem to like this:
 # from __future__ import unicode_literals
 
+import io
+import re
 import os
 
 from setuptools import setup, find_packages
@@ -72,13 +76,26 @@ PACKAGE_DATA = {
         os.path.join("tasks", "batch_fileio_managed", "data", "*.*"),
         os.path.join("tasks", "communication", "code", "*"),
         os.path.join("tasks", "communication", "data", "*.*"),
+        os.path.join("tasks", "communication2", "code", "*"),
+        os.path.join("tasks", "communication2", "data", "*.*"),
     ],
 }
 
 
+def find_version():
+    """Return the version string obtained from cms/__init__.py"""
+    path = os.path.join("cms", "__init__.py")
+    version_file = io.open(path, "rt", encoding="utf-8").read()
+    version_match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]",
+                              version_file, re.M)
+    if version_match is not None:
+        return version_match.group(1)
+    raise RuntimeError("Unable to find version string.")
+
+
 setup(
     name="cms",
-    version="1.3.dev0",
+    version=find_version(),
     author="The CMS development team",
     author_email="contestms@freelists.org",
     url="https://github.com/cms-dev/cms",
@@ -106,19 +123,29 @@ setup(
             "cmsReplayContest=cmstestsuite.ReplayContest:main",
             "cmsAdaptContest=cmstestsuite.AdaptContest:main",
             "cmsTestFileCacher=cmstestsuite.TestFileCacher:main",
+            "cmsAddAdmin=cmscontrib.AddAdmin:main",
+            "cmsAddParticipation=cmscontrib.AddParticipation:main",
+            "cmsAddStatement=cmscontrib.AddStatement:main",
+            "cmsAddSubmission=cmscontrib.AddSubmission:main",
+            "cmsAddTeam=cmscontrib.AddTeam:main",
             "cmsAddUser=cmscontrib.AddUser:main",
-            "cmsRemoveUser=cmscontrib.RemoveUser:main",
-            "cmsAddTask=cmscontrib.AddTask:main",
-            "cmsRemoveTask=cmscontrib.RemoveTask:main",
             "cmsComputeComplexity=cmscontrib.ComputeComplexity:main",
-            "cmsAddContest=cmscontrib.AddContest:main",
             "cmsDumpExporter=cmscontrib.DumpExporter:main",
             "cmsDumpImporter=cmscontrib.DumpImporter:main",
-            "cmsSpoolExporter=cmscontrib.SpoolExporter:main",
-            "cmsContestExporter=cmscontrib.ContestExporter:main",
-            "cmsContestImporter=cmscontrib.ContestImporter:main",
             "cmsDumpUpdater=cmscontrib.DumpUpdater:main",
+            "cmsExportSubmissions=cmscontrib.ExportSubmissions:main",
+            "cmsImportContest=cmscontrib.ImportContest:main",
+            "cmsImportTask=cmscontrib.ImportTask:main",
+            "cmsImportDataset=cmscontrib.ImportDataset:main",
+            "cmsImportTeam=cmscontrib.ImportTeam:main",
+            "cmsImportUser=cmscontrib.ImportUser:main",
             "cmsRWSHelper=cmscontrib.RWSHelper:main",
+            "cmsRemoveContest=cmscontrib.RemoveContest:main",
+            "cmsRemoveParticipation=cmscontrib.RemoveParticipation:main",
+            "cmsRemoveSubmissions=cmscontrib.RemoveSubmissions:main",
+            "cmsRemoveTask=cmscontrib.RemoveTask:main",
+            "cmsRemoveUser=cmscontrib.RemoveUser:main",
+            "cmsSpoolExporter=cmscontrib.SpoolExporter:main",
             "cmsMake=cmstaskenv.cmsMake:main",
             "cmsYamlImporter=cmscompat.YamlImporter:main",
             "cmsYamlReimporter=cmscompat.YamlReimporter:main",

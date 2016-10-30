@@ -186,10 +186,15 @@ class PolygonTaskLoader(TaskLoader):
             infile_param = judging.attrib['input-file']
             outfile_param = judging.attrib['output-file']
 
+            # Checker can be in any of these two locations.
             checker_src = os.path.join(self.path, "files", "check.cpp")
+            if not os.path.exists(checker_src):
+                checker_src = os.path.join(self.path, "check.cpp")
+
             if os.path.exists(checker_src):
                 logger.info("Checker found, compiling")
-                checker_exe = os.path.join(self.path, "files", "checker")
+                checker_exe = os.path.join(
+                    os.path.dirname(checker_src), "checker")
                 testlib_path = "/usr/local/include/cms/testlib.h"
                 if not config.installed:
                     testlib_path = os.path.join(os.path.dirname(__file__),
@@ -423,7 +428,7 @@ class PolygonContestLoader(ContestLoader):
         for problem in root.find('problems'):
             tasks.append(os.path.basename(problem.attrib['url']))
 
-        users = []
+        participations = []
 
         # This is not standard Polygon feature, but useful for CMS users
         # we assume contestants.txt contains one line for each user:
@@ -441,10 +446,14 @@ class PolygonContestLoader(ContestLoader):
                 for user in users_file.readlines():
                     user = user.strip()
                     user = user.split(';')
-                    username = user[0].strip()
-                    users.append(username)
+                    participations.append({
+                        "username": user[0].strip(),
+                        "password": user[1].strip(),
+                        "hidden": user[4].strip()
+                        # "ip" is not passed
+                    })
 
-        return Contest(**args), tasks, users
+        return Contest(**args), tasks, participations
 
     def contest_has_changed(self):
         """See docstring in class Loader.

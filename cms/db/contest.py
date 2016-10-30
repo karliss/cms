@@ -3,10 +3,11 @@
 
 # Contest Management System - http://cms-dev.github.io/
 # Copyright © 2010-2012 Giovanni Mascellani <mascellani@poisson.phc.unipi.it>
-# Copyright © 2010-2013 Stefano Maggiolo <s.maggiolo@gmail.com>
+# Copyright © 2010-2016 Stefano Maggiolo <s.maggiolo@gmail.com>
 # Copyright © 2010-2012 Matteo Boscariol <boscarim@hotmail.com>
 # Copyright © 2012-2014 Luca Wehrstedt <luca.wehrstedt@gmail.com>
 # Copyright © 2013 Bernard Blackham <bernard@largestprime.net>
+# Copyright © 2016 Myungwoo Chun <mc.tamaki@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -87,6 +88,46 @@ class Contest(Base):
         Boolean,
         nullable=False,
         default=True)
+
+    # Whether the user question is enabled.
+    allow_questions = Column(
+        Boolean,
+        nullable=False,
+        default=True)
+
+    # Whether the user test interface is enabled.
+    allow_user_tests = Column(
+        Boolean,
+        nullable=False,
+        default=True)
+
+    # Whether to prevent hidden participations to log in.
+    block_hidden_participations = Column(
+        Boolean,
+        nullable=False,
+        default=False)
+
+    # Whether to allow username/password authentication
+    allow_password_authentication = Column(
+        Boolean,
+        nullable=False,
+        default=True)
+
+    # Whether to enforce that the IP address of the request matches
+    # the IP address or subnet specified for the participation (if
+    # present).
+    ip_restriction = Column(
+        Boolean,
+        nullable=False,
+        default=True)
+
+    # Whether to automatically log in users connecting from an IP
+    # address specified in the ip field of a participation to this
+    # contest.
+    ip_autologin = Column(
+        Boolean,
+        nullable=False,
+        default=False)
 
     # The parameters that control contest-tokens follow. Note that
     # their effect during the contest depends on the interaction with
@@ -242,24 +283,6 @@ class Contest(Base):
             if task.name == task_name:
                 return idx
         raise KeyError("Task not found")
-
-    # FIXME - Use SQL syntax
-    def get_participation(self, username):
-        """Return the first participation in the contest with the given
-        username.
-
-        username (string): the name of the user we are interested in.
-
-        return (Participation): the corresponding participation object.
-
-        raise (KeyError): if no users with the given name participate.
-
-        """
-
-        for participation in self.participations:
-            if participation.user.username == username:
-                return participation
-        raise KeyError("Participation not found")
 
     def enumerate_files(self, skip_submissions=False, skip_user_tests=False,
                         skip_generated=False):
@@ -459,7 +482,7 @@ class Contest(Base):
                 next_gen_time,
                 expiration if expiration > timestamp else None)
 
-    def tokens_available(self, username, task_name, timestamp=None):
+    def tokens_available(self, participation, task, timestamp=None):
         """Return three pieces of data:
 
         [0] the number of available tokens for the user to play on the
@@ -501,8 +524,8 @@ class Contest(Base):
         future. Also, if r[0] == 0 and r[1] is None, then r[2] should
         be ignored.
 
-        username (string): the username of the user.
-        task_name (string): the name of the task.
+        participation (Participation): the participation.
+        task (Task): the task.
         timestamp (datetime|None): the time relative to which making
             the calculation, or None to use now.
 
@@ -513,16 +536,13 @@ class Contest(Base):
         if timestamp is None:
             timestamp = make_datetime()
 
-        participation = self.get_participation(username)
-        task = self.get_task(task_name)
-
         # Take the list of the tokens already played (sorted by time).
         tokens = participation.get_tokens()
         token_timestamps_contest = sorted([token.timestamp
                                            for token in tokens])
         token_timestamps_task = sorted([
             token.timestamp for token in tokens
-            if token.submission.task.name == task_name])
+            if token.submission.task.name == task.name])
 
         # If the contest is USACO-style (i.e., the time for each user
         # start when he/she logs in for the first time), then we start

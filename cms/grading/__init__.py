@@ -3,11 +3,12 @@
 
 # Contest Management System - http://cms-dev.github.io/
 # Copyright © 2010-2015 Giovanni Mascellani <mascellani@poisson.phc.unipi.it>
-# Copyright © 2010-2015 Stefano Maggiolo <s.maggiolo@gmail.com>
+# Copyright © 2010-2016 Stefano Maggiolo <s.maggiolo@gmail.com>
 # Copyright © 2010-2012 Matteo Boscariol <boscarim@hotmail.com>
 # Copyright © 2013 Bernard Blackham <bernard@largestprime.net>
 # Copyright © 2013-2014 Luca Wehrstedt <luca.wehrstedt@gmail.com>
 # Copyright © 2014 Fabian Gundlach <320pointsguy@gmail.com>
+# Copyright © 2016 Myungwoo Chun <mc.tamaki@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -38,7 +39,7 @@ from sqlalchemy.orm import joinedload
 
 from cms import config, \
     LANG_C, LANG_CPP, LANG_PASCAL, LANG_PYTHON, LANG_PHP, LANG_JAVA, \
-    SCORE_MODE_MAX
+    LANG_HS, SCORE_MODE_MAX
 from cms.db import Submission
 from cms.grading.Sandbox import Sandbox
 
@@ -136,6 +137,10 @@ EVALUATION_MESSAGES = MessageCollection([
     HumanMessage("success",
                  N_("Output is correct"),
                  N_("Your submission ran and gave the correct answer")),
+    HumanMessage("partial",
+                 N_("Output is partially correct"),
+                 N_("Your submission ran and gave the partially correct "
+                    "answer")),
     HumanMessage("wrong",
                  N_("Output isn't correct"),
                  N_("Your submission ran, but gave the wrong answer")),
@@ -260,6 +265,20 @@ def get_compilation_commands(language, source_filenames, executable_filename,
         command = ["/usr/bin/gcj", "--main=%s" % class_name, "-O3", "-o",
                    executable_filename] + source_filenames
         commands.append(command)
+    elif language == LANG_HS:
+        # Haskell module names are capitalized, so we change the source file
+        # names (except for the first one) to match the module's name.
+        # The first source file is, instead, the grader or the standalone
+        # source file; it won't be imported in any other source file, so
+        # there is no need to capitalize it.
+        def capitalize(string):
+            dirname, basename = os.path.split(string)
+            return os.path.join(dirname, basename[0].upper() + basename[1:])
+        for source in source_filenames[1:]:
+            commands.append(["/bin/ln", "-s", os.path.basename(source),
+                             capitalize(source)])
+        commands.append(["/usr/bin/ghc", "-static", "-O2", "-Wall", "-o",
+                         executable_filename, source_filenames[0]])
     else:
         raise ValueError("Unknown language %s." % language)
     return commands
@@ -279,7 +298,7 @@ def get_evaluation_commands(language, executable_filename):
 
     """
     commands = []
-    if language in (LANG_C, LANG_CPP, LANG_PASCAL, LANG_JAVA):
+    if language in (LANG_C, LANG_CPP, LANG_PASCAL, LANG_JAVA, LANG_HS):
         command = [os.path.join(".", executable_filename)]
         commands.append(command)
     elif language == LANG_PYTHON:
@@ -325,7 +344,10 @@ def format_status_text(status, translator=None):
         elif not isinstance(status, list):
             raise TypeError("Invalid type: %r" % type(status))
 
-        return translator(status[0]) % tuple(status[1:])
+        # translator('') gives, for some reason, the first lines of
+        # the po file.
+        text = translator(status[0]) if status[0] != '' else ''
+        return text % tuple(status[1:])
     except:
         logger.error("Unexpected error when formatting status "
                      "text: %r", status, exc_info=True)
@@ -345,6 +367,13 @@ def compilation_step(sandbox, commands):
     """
     # Set sandbox parameters suitable for compilation.
     sandbox.dirs += [("/etc", None, None)]
+    # We need to add "/var/lib/ghc" to the unrestricted dirs so GHC can access
+    # haskell's package database.
+    # GHC looks for it in "/usr/lib/ghc/package.conf.d", which is only a symlink
+    # to "/var/lib/ghc/package.conf.d"
+    ghc_dir = "/var/lib/ghc"
+    if os.path.exists(ghc_dir):
+        sandbox.dirs += [("/var/lib/ghc", None, None)]
     sandbox.preserve_env = True
     sandbox.max_processes = None
     sandbox.timeout = 10
@@ -629,6 +658,28 @@ def evaluation_step_after_run(sandbox):
     return success, plus
 
 
+def merge_evaluation_results(plus0, plus1):
+    """Merges two evaluation results provided by different sandboxes.
+
+    """
+    plus = plus0.copy()
+    plus["execution_time"] += plus1["execution_time"]
+    plus["execution_wall_clock_time"] = max(
+        plus["execution_wall_clock_time"],
+        plus1["execution_wall_clock_time"])
+    plus["execution_memory"] += plus1["execution_memory"]
+    if plus0["exit_status"] == Sandbox.EXIT_OK:
+        plus["exit_status"] = plus1["exit_status"]
+        if plus1["exit_status"] == Sandbox.EXIT_SIGNAL:
+            plus["signal"] = plus1["signal"]
+        elif plus1["exit_status"] == Sandbox.EXIT_SYSCALL:
+            plus["syscall"] = plus1["syscall"]
+        elif plus1["exit_status"] == Sandbox.EXIT_FILE_ACCESS:
+            plus["filename"] = plus1["filename"]
+
+    return plus
+
+
 def human_evaluation_message(plus):
     """Given the plus object returned by evaluation_step, builds a
     human-readable message about what happened.
@@ -646,11 +697,11 @@ def human_evaluation_message(plus):
     elif exit_status == Sandbox.EXIT_TIMEOUT_WALL:
         return [EVALUATION_MESSAGES.get("walltimeout").message]
     elif exit_status == Sandbox.EXIT_SIGNAL:
-        return [EVALUATION_MESSAGES.get("signal").message % plus['signal']]
+        return [EVALUATION_MESSAGES.get("signal").message, plus['signal']]
     elif exit_status == Sandbox.EXIT_SANDBOX_ERROR:
         return None
     elif exit_status == Sandbox.EXIT_SYSCALL:
-        return [EVALUATION_MESSAGES.get("syscall").message % plus['syscall']]
+        return [EVALUATION_MESSAGES.get("syscall").message, plus['syscall']]
     elif exit_status == Sandbox.EXIT_FILE_ACCESS:
         # Don't tell which file: would be too much information!
         return [EVALUATION_MESSAGES.get("fileaccess").message]
@@ -721,6 +772,17 @@ def extract_outcome_and_text(sandbox):
     except ValueError:
         logger.error("Wrong outcome `%s' from manager.", outcome)
         raise ValueError("Outcome is not a float.")
+
+    # If the text starts with translate, the manager is asking us to
+    # use a stock message, that can be translated.
+    if text.startswith("translate:"):
+        remaining = text[len("translate:"):].strip()
+        if remaining in ["success", "partial", "wrong"]:
+            text = EVALUATION_MESSAGES.get(remaining).message
+        else:
+            remaining = remaining[:15]  # to avoid logging lots of text
+            logger.warning("Manager asked to translate text, but string "
+                           "'%s' is not recognized." % remaining)
 
     return outcome, [text]
 

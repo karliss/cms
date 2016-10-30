@@ -23,7 +23,6 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import datetime
 import io
 import logging
 import os
@@ -148,15 +147,6 @@ def write_test_case_list(test_list, filename):
             f.write('%s %s\n' % (test.name, lang))
 
 
-def time_difference(start_time, end_time):
-    secs = int((end_time - start_time).total_seconds())
-    mins = secs / 60
-    secs = secs % 60
-    hrs = mins / 60
-    mins = mins % 60
-    return "Time elapsed: %02d:%02d:%02d" % (hrs, mins, secs)
-
-
 def main():
     parser = ArgumentParser(description="Runs the CMS functional test suite.")
     parser.add_argument(
@@ -181,6 +171,7 @@ def main():
     args = parser.parse_args()
 
     CONFIG["VERBOSITY"] = args.verbose
+    CONFIG["COVERAGE"] = True
 
     # Pre-process our command-line arguments to figure out which tests to run.
     regexes = [re.compile(s) for s in args.regex]
@@ -214,11 +205,10 @@ def main():
 
     # Clear out any old coverage data.
     logging.info("Clearing old coverage data.")
-    sh("python -m coverage erase")
+    sh(sys.executable + " -m coverage erase")
 
     # Startup the test runner.
-    start_time = datetime.datetime.now()
-    runner = TestRunner(test_list, contest_id=args.contest)
+    runner = TestRunner(test_list, contest_id=args.contest, workers=4)
     runner.startup()
 
     # Submit and wait for all tests to complete.
@@ -230,8 +220,7 @@ def main():
 
     # And good night!
     runner.shutdown()
-    end_time = datetime.datetime.now()
-    logger.info(time_difference(start_time, end_time))
+    runner.log_elapsed_time()
     combine_coverage()
 
     logger.info("Executed: %s", tests)

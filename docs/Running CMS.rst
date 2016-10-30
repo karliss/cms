@@ -8,11 +8,10 @@ The first thing to do is to create the user and the database. For PostgreSQL, th
 
 .. sourcecode:: bash
 
-    sudo su - postgres
-    createuser cmsuser -P
-    createdb -O cmsuser database
-    psql database -c 'ALTER SCHEMA public OWNER TO cmsuser'
-    psql database -c 'GRANT SELECT ON pg_largeobject TO cmsuser'
+    createuser --username=postgres --pwprompt cmsuser
+    createdb --username=postgres --owner=cmsuser cmsdb
+    psql --username=postgres --dbname=cmsdb --command='ALTER SCHEMA public OWNER TO cmsuser'
+    psql --username=postgres --dbname=cmsdb --command='GRANT SELECT ON pg_largeobject TO cmsuser'
 
 The last two lines are required to give the PostgreSQL user some privileges which it does not have by default, despite being the database owner.
 
@@ -32,7 +31,7 @@ Finally you have to create the database schema for CMS, by running:
 
     Moreover, you need to change the HBA (a sort of access control list for PostgreSQL) to accept login requests from outside localhost. Open the file :file:`pg_hba.conf` and add a line like this one::
 
-        host  database  cmsuser  192.168.0.0/24  md5
+        host  cmsdb  cmsuser  192.168.0.0/24  md5
 
 
 .. _running-cms_configuring-cms:
@@ -91,6 +90,13 @@ The flag ``-a`` informs ResourceService that it has to start all other services,
 
 Note that it is your duty to keep CMS's configuration synchronized among the machines.
 
+You should now be able to start exploring the admin interface, by default at http://localhost:8889/. The interface is accessible with an admin account, which you need to create first using the AddAdmin command, for example:
+
+.. sourcecode:: bash
+
+    cmsAddAdmin name
+
+CMS will create an admin account with username "name" and a random password that will be printed by the command. You can log in with this credentials, and then use the admin interface to modify the account or add other accounts.
 
 .. _running-cms_recommended-setup:
 

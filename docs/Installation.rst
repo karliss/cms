@@ -40,7 +40,9 @@ Then you require the compilation and execution environments for the languages yo
 
 * `Python <http://www.python.org/>`_ >= 2.7, < 3.0 (for Python, with executable ``python2``; note though that this must be installed anyway because it is required by CMS itself);
 
-* `PHP <http://www.php.net>`_ >= 5 (for PHP, with executable ``php5``).
+* `PHP <http://www.php.net>`_ >= 5 (for PHP, with executable ``php5``);
+
+* `Glasgow Haskell Compiler <https://www.haskell.org/ghc/>`_ (for Haskell, with executable ``ghc``).
 
 All dependencies can be installed automatically on most Linux distributions.
 
@@ -55,11 +57,12 @@ On Ubuntu 14.10, one will need to run the following script to satisfy all depend
          gettext python2.7 iso-codes shared-mime-info stl-manual cgroup-lite
 
     # Only if you will use pip/virtualenv to install python dependencies
-    sudo apt-get install python-dev libpq-dev libcups2-dev libyaml-dev
+    sudo apt-get install python-dev libpq-dev libcups2-dev libyaml-dev \
+         libffi-dev
 
     # Optional
     sudo apt-get install nginx-full php5-cli php5-fpm phppgadmin \
-         texlive-latex-base a2ps
+         texlive-latex-base a2ps gcj-jdk haskell-platform
 
 Arch Linux
 ----------
@@ -79,7 +82,8 @@ On Arch Linux, unofficial AUR packages can be found: `cms <http://aur.archlinux.
     sudo pacman -S postgresql-libs libcups libyaml
 
     # Optional
-    sudo pacman -S nginx php php-fpm phppgadmin texlive-core a2ps
+    sudo pacman -S nginx php php-fpm phppgadmin texlive-core a2ps \
+        ghc
 
 Debian
 ------
@@ -213,7 +217,7 @@ To install CMS python dependencies on Ubuntu, you can issue:
          python-sqlalchemy python-psutil python-netifaces python-crypto \
          python-tz python-six python-beautifulsoup python-mechanize \
          python-coverage python-mock python-requests python-werkzeug \
-         python-gevent patool
+         python-gevent python-bcrypt python-chardet patool
 
     # Optional.
     # sudo apt-get install python-yaml python-sphinx python-cups python-pypdf2
@@ -232,8 +236,8 @@ To install CMS python dependencies on Arch Linux (again: assuming you did not us
     sudo pacman -S python2-setuptools python2-tornado python2-psycopg2 \
          python2-sqlalchemy python2-psutil python2-netifaces python2-crypto \
          python2-pytz python2-six python2-beautifulsoup3 python2-mechanize \
-         python2-mock python2-requests python2-werkzeug python2-gevent \
-         python2-coverage
+         python2-coverage python2-mock python2-requests python2-werkzeug \
+         python2-gevent python2-bcrypt python2-chardet
 
     # Install the following from AUR.
     # https://aur.archlinux.org/packages/patool/

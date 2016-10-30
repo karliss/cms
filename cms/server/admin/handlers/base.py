@@ -5,9 +5,10 @@
 # Copyright © 2010-2013 Giovanni Mascellani <mascellani@poisson.phc.unipi.it>
 # Copyright © 2010-2015 Stefano Maggiolo <s.maggiolo@gmail.com>
 # Copyright © 2010-2012 Matteo Boscariol <boscarim@hotmail.com>
-# Copyright © 2012-2014 Luca Wehrstedt <luca.wehrstedt@gmail.com>
+# Copyright © 2012-2016 Luca Wehrstedt <luca.wehrstedt@gmail.com>
 # Copyright © 2014 Artem Iglikov <artem.iglikov@gmail.com>
 # Copyright © 2014 Fabian Gundlach <320pointsguy@gmail.com>
+# Copyright © 2016 Myungwoo Chun <mc.tamaki@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -35,14 +36,16 @@ import logging
 import traceback
 
 from datetime import datetime, timedelta
+from functools import wraps
 
 import tornado.web
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import subqueryload
 
-from cms.db import Contest, Participation, Question, Session, \
-    Submission, SubmissionFormatElement, SubmissionResult, Task, User
+from cms import __version__
+from cms.db import Admin, Contest, Participation, Question, \
+    Submission, SubmissionFormatElement, SubmissionResult, Task, Team, User
 from cms.grading.scoretypes import get_score_type_class
 from cms.grading.tasktypes import get_task_type_class
 from cms.server import CommonRequestHandler, file_handler_gen, get_url_root
@@ -115,18 +118,68 @@ def parse_datetime(value):
         raise ValueError("Can't cast %s to datetime." % value)
 
 
-def parse_ip_address_or_subnet(value):
-    """Validate an IP address or subnet."""
-    address, sep, subnet = value.partition("/")
-    if sep != "":
-        subnet = int(subnet)
-        assert 0 <= subnet < 32
-    fields = address.split(".")
-    assert len(fields) == 4
-    for field in fields:
-        num = int(field)
-        assert 0 <= num < 256
-    return value
+def parse_ip_address_or_subnet(ip_list):
+    """Validate a comma-separated list of IP addresses or subnets."""
+    for value in ip_list.split(","):
+        address, sep, subnet = value.partition("/")
+        if sep != "":
+            subnet = int(subnet)
+            assert 0 <= subnet < 32
+        fields = address.split(".")
+        assert len(fields) == 4
+        for field in fields:
+            num = int(field)
+            assert 0 <= num < 256
+    return ip_list
+
+
+def require_permission(permission="authenticated", self_allowed=False):
+    """Return a decorator requiring a specific admin permission level
+
+    The default value, "authenticated", just checkes that the admin is
+    logged in. All other values also implicitly require it. Therefore,
+    there is no need to use tornado.web.authenticated if using this.
+
+    permission (string): one of the permission levels.
+    self_allowed (bool): if true, interpret the first argument as the
+       admin id that can execute the method regardless of their
+       permission.
+
+    """
+    if permission not in [BaseHandler.PERMISSION_ALL,
+                          BaseHandler.PERMISSION_MESSAGING,
+                          BaseHandler.AUTHENTICATED]:
+        raise ValueError("Invalid permission level %s." % permission)
+
+    def decorator(func):
+        """Decorator for requiring a permission level
+
+        """
+        @wraps(func)
+        @tornado.web.authenticated
+        def newfunc(self, *args, **kwargs):
+            """Check if the permission is present before calling the function.
+
+            """
+            if permission == BaseHandler.AUTHENTICATED:
+                return func(self, *args, **kwargs)
+
+            user = self.current_user
+            permission_key = "permission_%s" % permission
+            if user.permission_all or getattr(user, permission_key):
+                return func(self, *args, **kwargs)
+            else:
+                if self_allowed and len(args) > 0 and int(args[0]) == user.id:
+                    # First argument is assumed to be the admin id,
+                    # encoded as a unicode object, and should match
+                    # the current user id.
+                    return func(self, *args, **kwargs)
+                else:
+                    raise tornado.web.HTTPError(403, "Admin is not authorized")
+
+        return newfunc
+
+    return decorator
 
 
 class BaseHandler(CommonRequestHandler):
@@ -136,6 +189,9 @@ class BaseHandler(CommonRequestHandler):
     child of this class.
 
     """
+    PERMISSION_ALL = "all"
+    PERMISSION_MESSAGING = "messaging"
+    AUTHENTICATED = "authenticated"
 
     def try_commit(self):
         """Try to commit the current session.
@@ -157,6 +213,32 @@ class BaseHandler(CommonRequestHandler):
                 make_datetime(),
                 "Operation successful.", "")
             return True
+
+    def get_current_user(self):
+        """Gets the current admin from cookies.
+
+        return (Admin|None): if a valid cookie is retrieved, return
+            the Admin object, otherwise None.
+
+        """
+        admin_id = self.service.auth_handler.admin_id
+        if admin_id is None:
+            return None
+
+        # Load admin.
+        admin = self.sql_session.query(Admin)\
+            .filter(Admin.id == admin_id)\
+            .filter(Admin.enabled.is_(True))\
+            .first()
+        if admin is None:
+            self.service.auth_handler.clear()
+            return None
+
+        # Maybe refresh the cookie.
+        if self.refresh_cookie:
+            self.service.auth_handler.refresh()
+
+        return admin
 
     def safe_get_item(self, cls, ident, session=None):
         """Get item from database of class cls and id ident, using
@@ -183,12 +265,7 @@ class BaseHandler(CommonRequestHandler):
         """This method is executed at the beginning of each request.
 
         """
-        # Attempt to update the contest and all its references
-        # If this fails, the request terminates.
-        self.set_header("Cache-Control", "no-cache, must-revalidate")
-
-        self.sql_session = Session()
-        self.sql_session.expire_all()
+        super(BaseHandler, self).prepare()
         self.contest = None
 
     def render_params(self):
@@ -198,9 +275,13 @@ class BaseHandler(CommonRequestHandler):
 
         """
         params = {}
+        params["rtd_version"] = "latest" if "dev" in __version__ \
+                                else "v" + __version__[:3]
         params["timestamp"] = make_datetime()
         params["contest"] = self.contest
         params["url_root"] = get_url_root(self.request.path)
+        if self.current_user is not None:
+            params["current_user"] = self.current_user
         if self.contest is not None:
             params["phase"] = self.contest.phase(params["timestamp"])
             # Keep "== None" in filter arguments. SQLAlchemy does not
@@ -215,6 +296,7 @@ class BaseHandler(CommonRequestHandler):
         params["contest_list"] = self.sql_session.query(Contest).all()
         params["task_list"] = self.sql_session.query(Task).all()
         params["user_list"] = self.sql_session.query(User).all()
+        params["team_list"] = self.sql_session.query(Team).all()
         return params
 
     def finish(self, *args, **kwds):
@@ -421,12 +503,12 @@ class BaseHandler(CommonRequestHandler):
 
         """
         query = query\
-            .options(joinedload(Submission.task))\
-            .options(joinedload(Submission.participation))\
-            .options(joinedload(Submission.files))\
-            .options(joinedload(Submission.token))\
-            .options(joinedload(Submission.results)
-                     .joinedload(SubmissionResult.evaluations))\
+            .options(subqueryload(Submission.task))\
+            .options(subqueryload(Submission.participation))\
+            .options(subqueryload(Submission.files))\
+            .options(subqueryload(Submission.token))\
+            .options(subqueryload(Submission.results)
+                     .subqueryload(SubmissionResult.evaluations))\
             .order_by(Submission.timestamp.desc())
 
         offset = page * page_size
@@ -450,16 +532,30 @@ class BaseHandler(CommonRequestHandler):
 FileHandler = file_handler_gen(BaseHandler)
 
 
-def SimpleHandler(page):
-    class Cls(BaseHandler):
-        def get(self):
-            self.r_params = self.render_params()
-            self.render(page, **self.r_params)
+def SimpleHandler(page, authenticated=True, permission_all=False):
+    if permission_all:
+        class Cls(BaseHandler):
+            @require_permission(BaseHandler.PERMISSION_ALL)
+            def get(self):
+                self.r_params = self.render_params()
+                self.render(page, **self.r_params)
+    elif authenticated:
+        class Cls(BaseHandler):
+            @require_permission(BaseHandler.AUTHENTICATED)
+            def get(self):
+                self.r_params = self.render_params()
+                self.render(page, **self.r_params)
+    else:
+        class Cls(BaseHandler):
+            def get(self):
+                self.r_params = self.render_params()
+                self.render(page, **self.r_params)
     return Cls
 
 
 def SimpleContestHandler(page):
     class Cls(BaseHandler):
+        @require_permission(BaseHandler.AUTHENTICATED)
         def get(self, contest_id):
             self.contest = self.safe_get_item(Contest, contest_id)
 

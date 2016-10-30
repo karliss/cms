@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 # Contest Management System - http://cms-dev.github.io/
-# Copyright © 2015 Stefano Maggiolo <s.maggiolo@gmail.com>
+# Copyright © 2015-2016 Stefano Maggiolo <s.maggiolo@gmail.com>
+# Copyright © 2016 Amir Keivan Mohtashami <akmohtashami97@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
@@ -34,9 +35,9 @@ from cms import LANGUAGES
 from cmstestsuite import get_cms_config, CONFIG
 from cmstestsuite import add_contest, add_existing_user, add_existing_task, \
     add_user, add_task, add_testcase, add_manager, \
-    get_tasks, get_users, start_service, start_server, \
-    start_ranking_web_server, shutdown_services, restart_service
+    get_tasks, get_users, initialize_aws
 from cmstestsuite.Test import TestFailure
+from cmstestsuite.programstarter import ProgramStarter
 from cmscommon.datetime import get_system_timezone
 
 
@@ -44,7 +45,11 @@ logger = logging.getLogger(__name__)
 
 
 class TestRunner(object):
-    def __init__(self, test_list, contest_id=None):
+    def __init__(self, test_list, contest_id=None, workers=1):
+        self.start_time = datetime.datetime.now()
+
+        self.ps = ProgramStarter()
+
         # Map from task name to (task id, task_module).
         self.task_id_map = {}
 
@@ -61,7 +66,9 @@ class TestRunner(object):
             os.chdir("%(TEST_DIR)s" % CONFIG)
             os.environ["PYTHONPATH"] = "%(TEST_DIR)s" % CONFIG
 
-        TestRunner.start_generic_services()
+        self.start_generic_services(workers)
+        initialize_aws(self.rand)
+
         if contest_id is None:
             self.contest_id = self.create_contest()
         else:
@@ -89,36 +96,37 @@ class TestRunner(object):
             CONFIG["CONFIG_PATH"] = "/usr/local/etc/cms.conf"
         return get_cms_config()
 
+    def log_elapsed_time(self):
+        end_time = datetime.datetime.now()
+        secs = int((end_time - self.start_time).total_seconds())
+        mins = secs / 60
+        secs = secs % 60
+        hrs = mins / 60
+        mins = mins % 60
+        logger.info("Time elapsed: %02d:%02d:%02d", hrs, mins, secs)
+
     # Service management.
 
     def startup(self):
-        self.start_es()
-        self.start_cws()
-        self.start_ps()
+        self.ps.start("EvaluationService", contest=self.contest_id)
+        self.ps.start("ContestWebServer", contest=self.contest_id)
+        self.ps.start("ProxyService", contest=self.contest_id)
+        self.ps.wait()
 
-    def start_es(self):
-        start_service("EvaluationService", contest=self.contest_id)
-
-    def start_cws(self):
-        start_server("ContestWebServer", contest=self.contest_id)
-
-    def start_ps(self):
+    def start_generic_services(self, workers=1):
+        self.ps.start("LogService")
+        self.ps.start("ResourceService")
+        self.ps.start("Checker")
+        for shard in xrange(workers):
+            self.ps.start("Worker", shard)
+        self.ps.start("ScoringService")
+        self.ps.start("AdminWebServer")
         # Just to verify it starts successfully.
-        start_service("ProxyService", contest=self.contest_id)
-
-    @staticmethod
-    def start_generic_services():
-        start_service("LogService")
-        start_service("ResourceService")
-        start_service("Checker")
-        start_service("Worker")
-        start_service("ScoringService")
-        start_server("AdminWebServer")
-        # Just to verify it starts successfully.
-        start_ranking_web_server()
+        self.ps.start("RankingWebServer", shard=None)
+        self.ps.wait()
 
     def shutdown(self):
-        shutdown_services()
+        self.ps.stop_all()
 
     # Data creation.
 
@@ -134,6 +142,7 @@ class TestRunner(object):
             name="testcontest" + str(self.rand),
             description="A test contest #%s." % self.rand,
             languages=LANGUAGES,
+            allow_password_authentication="checked",
             start=start_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
             stop=stop_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
             timezone=get_system_timezone(),
@@ -194,9 +203,9 @@ class TestRunner(object):
         name = task_module.task_info['name'] + str(self.rand)
 
         # Have we done this before? Pull it out of our cache if so.
-        if task_module in self.task_id_map:
+        if name in self.task_id_map:
             # Ensure we don't have multiple modules with the same task name.
-            assert self.task_id_map[task_module][1] == task_module
+            assert self.task_id_map[name][1] == task_module
 
             return self.task_id_map[name][0]
 
@@ -208,8 +217,8 @@ class TestRunner(object):
             "token_gen_number": "0",
             "token_gen_interval": "1",
             "token_gen_max": "100",
-            "max_submission_number": "100",
-            "max_user_test_number": "100",
+            "max_submission_number": None,
+            "max_user_test_number": None,
             "min_submission_interval": None,
             "min_user_test_interval": None,
         }
@@ -275,7 +284,8 @@ class TestRunner(object):
         # tasks and sending them to RWS.
         for test in self.test_list:
             self.create_or_get_task(test.task_module)
-        restart_service("ProxyService", contest=self.contest_id)
+        self.ps.restart("ProxyService", contest=self.contest_id)
+        self.ps.wait()
 
         for i, (test, lang) in enumerate(self._all_submissions()):
             logging.info("Submitting submission %s/%s: %s (%s)",

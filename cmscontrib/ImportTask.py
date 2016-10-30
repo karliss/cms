@@ -6,7 +6,7 @@
 # Copyright © 2010-2012 Stefano Maggiolo <s.maggiolo@gmail.com>
 # Copyright © 2010-2012 Matteo Boscariol <boscarim@hotmail.com>
 # Copyright © 2013 Luca Wehrstedt <luca.wehrstedt@gmail.com>
-# Copyright © 2014 William Di Luigi <williamdiluigi@gmail.com>
+# Copyright © 2014-2016 William Di Luigi <williamdiluigi@gmail.com>
 # Copyright © 2015 Luca Chiodini <luca@chiodini.org>
 #
 # This program is free software: you can redistribute it and/or modify
@@ -44,12 +44,12 @@ import logging
 import os
 
 from cms import utf8_decoder
-from cms.db import SessionGen, Task
+from cms.db import Contest, SessionGen, Task
 from cms.db.filecacher import FileCacher
 
+from cmscontrib import BaseImporter
 from cmscontrib.loaders import choose_loader, build_epilog
 
-from . import BaseImporter
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +60,24 @@ class TaskImporter(BaseImporter):
 
     """
 
-    def __init__(self, path, update, no_statement, loader_class):
+    def __init__(self, path, prefix, override_name, update, no_statement,
+                 contest_id, loader_class):
+        """Create the importer object for a task.
+
+        path (string): the path to the file or directory to import.
+        prefix (string): an optional prefix added to the task name.
+        override_name (string): an optional new name for the task.
+        update (bool): if the task already exists, try to update it.
+        no_statement (bool): do not try to import the task statement.
+        contest_id (int): if set, the new task will be tied to this contest.
+
+        """
         self.file_cacher = FileCacher()
+        self.prefix = prefix
+        self.override_name = override_name
         self.update = update
         self.no_statement = no_statement
+        self.contest_id = contest_id
         self.loader = loader_class(os.path.abspath(path), self.file_cacher)
 
     def do_import(self):
@@ -78,6 +92,14 @@ class TaskImporter(BaseImporter):
         task = self.loader.get_task(get_statement=not self.no_statement)
         if task is None:
             return
+
+        # Override name, if necessary
+        if self.override_name:
+            task.name = self.override_name
+
+        # Apply the prefix, if there is one
+        if self.prefix:
+            task.name = self.prefix + task.name
 
         # Store
         logger.info("Creating task on the database.")
@@ -100,7 +122,26 @@ class TaskImporter(BaseImporter):
                                     task.name)
                     return
             else:
+                if self.contest_id is not None:
+                    contest = session.query(Contest) \
+                                     .filter(Contest.id == self.contest_id) \
+                                     .first()
+
+                    if contest is None:
+                        logger.critical(
+                            "The specified contest (id %s) does not exist. "
+                            "Aborting, no task imported.",
+                            self.contest_id)
+                        return
+                    else:
+                        logger.info(
+                            "Attaching task to contest with id %s.",
+                            self.contest_id)
+                        task.num = len(contest.tasks)
+                        task.contest = contest
+
                 session.add(task)
+
             session.commit()
             task_id = task.id
 
@@ -111,7 +152,7 @@ def main():
     """Parse arguments and launch process."""
 
     parser = argparse.ArgumentParser(
-        description="Create a new or update an existing task in CMS.",
+        description="Import a new task or update an existing one in CMS.",
         epilog=build_epilog(),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -133,6 +174,21 @@ def main():
         help="do not import / update task statement"
     )
     parser.add_argument(
+        "-c", "--contest-id",
+        action="store", type=int,
+        help="id of the contest the task will be attached to"
+    )
+    parser.add_argument(
+        "-p", "--prefix",
+        action="store", type=utf8_decoder,
+        help="the prefix to be added before the task name"
+    )
+    parser.add_argument(
+        "-n", "--name",
+        action="store", type=utf8_decoder,
+        help="the new name that will override the task name"
+    )
+    parser.add_argument(
         "target",
         action="store", type=utf8_decoder,
         help="target file/directory from where to import task(s)"
@@ -150,6 +206,9 @@ def main():
         path=args.target,
         update=args.update,
         no_statement=args.no_statement,
+        contest_id=args.contest_id,
+        prefix=args.prefix,
+        override_name=args.name,
         loader_class=loader_class
     ).do_import()
 

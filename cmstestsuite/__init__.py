@@ -3,7 +3,7 @@
 
 # Contest Management System - http://cms-dev.github.io/
 # Copyright © 2012 Bernard Blackham <bernard@largestprime.net>
-# Copyright © 2013-2015 Stefano Maggiolo <s.maggiolo@gmail.com>
+# Copyright © 2013-2016 Stefano Maggiolo <s.maggiolo@gmail.com>
 # Copyright © 2013-2014 Luca Wehrstedt <luca.wehrstedt@gmail.com>
 # Copyright © 2014 Luca Versari <veluca93@gmail.com>
 # Copyright © 2014 William Di Luigi <williamdiluigi@gmail.com>
@@ -25,22 +25,23 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import atexit
-import errno
 import io
 import json
+import logging
 import mechanize
 import os
 import re
-import signal
-import socket
 import subprocess
+import sys
 import time
-from urlparse import urlsplit
 
-import cmstestsuite.web
-from cmstestsuite.web.CWSRequests import LoginRequest, SubmitRequest
-from cmstestsuite.web.AWSRequests import AWSSubmissionViewRequest
+from cmstestsuite.web import browser_do_request
+from cmstestsuite.web.AWSRequests import \
+    AWSLoginRequest, AWSSubmissionViewRequest
+from cmstestsuite.web.CWSRequests import CWSLoginRequest, SubmitRequest
+
+
+logger = logging.getLogger(__name__)
 
 
 # CONFIG is populated by our test script.
@@ -53,15 +54,18 @@ CONFIG = {
 cms_config = None
 
 
-# We store a list of all services that are running so that we can cleanly shut
-# them down.
-running_services = {}
-running_servers = {}
-
-
 # List of users and tasks we created as part of the test.
 created_users = {}
 created_tasks = {}
+
+
+# Information on the administrator running the tests.
+admin_info = {}
+
+
+# Base URLs for AWS and CWS
+AWS_BASE_URL = "http://localhost:8889/"
+CWS_BASE_URL = "http://localhost:8888/"
 
 
 # Persistent browsers to access AWS and CWS.
@@ -69,50 +73,32 @@ aws_browser = None
 cws_browser = None
 
 
+def get_aws_browser():
+    global aws_browser
+    if aws_browser is None:
+        aws_browser = mechanize.Browser()
+        aws_browser.set_handle_robots(False)
+        AWSLoginRequest(aws_browser,
+                        admin_info["username"], admin_info["password"],
+                        base_url=AWS_BASE_URL).execute()
+    return aws_browser
+
+
+def get_cws_browser(user_id):
+    global cws_browser
+    if cws_browser is None:
+        cws_browser = mechanize.Browser()
+        cws_browser.set_handle_robots(False)
+        cws_browser.set_handle_redirect(False)
+        username = created_users[user_id]['username']
+        password = created_users[user_id]['password']
+        CWSLoginRequest(
+            cws_browser, username, password, base_url=CWS_BASE_URL).execute()
+    return cws_browser
+
+
 class FrameworkException(Exception):
     pass
-
-
-class RemoteService(object):
-    """Class which implements the RPC protocol used by CMS.
-
-    This is deliberately a re-implementation in order to catch or
-    trigger bugs in the CMS services.
-
-    """
-    def __init__(self, service_name, shard):
-        address, port = cms_config["core_services"][service_name][shard]
-
-        self.service_name = service_name
-        self.shard = shard
-        self.address = address
-        self.port = port
-
-    def call(self, function_name, data):
-        """Perform a synchronous RPC call."""
-        s = json.dumps({
-            "__id": "foo",
-            "__method": function_name,
-            "__data": data,
-        })
-        msg = s + "\r\n"
-
-        # Send message.
-        sock = socket.socket()
-        sock.connect((self.address, self.port))
-        sock.send(msg)
-
-        # Wait for response.
-        s = ''
-        while len(s) < 2 or s[-2:] != "\r\n":
-            s += sock.recv(1)
-        s = s[:-2]
-        sock.close()
-
-        # Decode reply.
-        reply = json.loads(s)
-
-        return reply
 
 
 def read_cms_config():
@@ -131,12 +117,12 @@ def sh(cmdline, ignore_failure=False):
     """Execute a simple shell command.
 
     If cmdline is a string, it is passed to sh -c verbatim.  All escaping must
-    be performed by the user.  If cmdline is an array, then no escaping is
+    be performed by the user. If cmdline is an array, then no escaping is
     required.
 
     """
     if CONFIG["VERBOSITY"] >= 1:
-        print('$', cmdline)
+        logger.info(str('$' + cmdline))
     if CONFIG["VERBOSITY"] >= 3:
         cmdline += ' > /dev/null 2>&1'
     if isinstance(cmdline, list):
@@ -147,37 +133,6 @@ def sh(cmdline, ignore_failure=False):
         raise FrameworkException(
             "Execution failed with %d/%d. Tried to execute:\n%s\n" %
             (ret & 0xff, ret >> 8, cmdline))
-
-
-def spawn(cmdline):
-    """Execute a python application."""
-
-    def kill(job):
-        try:
-            job.kill()
-        except OSError:
-            pass
-
-    if CONFIG["VERBOSITY"] >= 1:
-        print('$', ' '.join(cmdline))
-
-    if CONFIG["TEST_DIR"] is not None:
-        cmdline = ['python', '-m', 'coverage', 'run', '-p', '--source=cms'] + \
-            cmdline
-
-    if CONFIG["VERBOSITY"] >= 3:
-        stdout = None
-        stderr = None
-    else:
-        stdout = io.open(os.devnull, 'wb')
-        stderr = stdout
-    job = subprocess.Popen(cmdline, stdout=stdout, stderr=stderr)
-    atexit.register(lambda: kill(job))
-    return job
-
-
-def info(s):
-    print('==>', s)
 
 
 def configure_cms(options):
@@ -214,157 +169,32 @@ def configure_cms(options):
     read_cms_config()
 
 
-def start_prog(path, shard=0, contest=None):
-    """Execute a CMS process."""
-    args = [path]
-    if shard is not None:
-        args.append("%s" % shard)
-    if contest is not None:
-        args += ['-c', "%s" % contest]
-    return spawn(args)
+def combine_coverage():
+    logger.info("Combining coverage results.")
+    sh(sys.executable + " -m coverage combine")
 
 
-def start_servicer(service_name, check, shard=0, contest=None):
-    """Start a CMS service."""
+def initialize_aws(rand):
+    """Create an admin and logs in
 
-    info("Starting %s." % service_name)
-    executable = os.path.join('.', 'scripts', 'cms%s' % (service_name))
-    if CONFIG["TEST_DIR"] is None:
-        executable = 'cms%s' % service_name
-    prog = start_prog(executable, shard=shard, contest=contest)
-
-    # Wait for service to come up - ping it!
-    attempts = 0
-    while attempts <= 12:
-        attempts += 1
-        try:
-            try:
-                check(service_name, shard)
-            except socket.error as error:
-                if error.errno != errno.ECONNREFUSED:
-                    raise error
-                else:
-                    time.sleep(0.1 * (1.2 ** attempts))
-                    continue
-            else:
-                return prog
-        except Exception:
-            print("Unexpected exception while waiting for the service:")
-            raise
-
-    # If we arrive here, it means the service was not fired up.
-    if shard is None:
-        raise FrameworkException("Failed to bring up service %s" %
-                                 service_name)
-    else:
-        raise FrameworkException("Failed to bring up service %s/%d" %
-                                 (service_name, shard))
-
-
-def check_service(service_name, shard):
-    """Check if the service is up."""
-    rs = RemoteService(service_name, shard)
-    reply = rs.call("echo", {"string": "hello"})
-    if reply['__data'] != 'hello':
-        raise Exception("Strange response from service.")
-
-
-def start_service(service_name, shard=0, contest=None):
-    """Start a CMS service."""
-    prog = start_servicer(service_name, check_service, shard, contest)
-    rs = RemoteService(service_name, shard)
-    running_services[(service_name, shard, contest)] = (rs, prog)
-
-    return prog
-
-
-def restart_service(service_name, shard=0, contest=None):
-    shutdown_service(service_name, shard, contest)
-    return start_service(service_name, shard, contest)
-
-
-def check_server(service_name, shard):
-    """Check if the server is up."""
-    check_service(service_name, shard)
-    if service_name == 'AdminWebServer':
-        port = cms_config['admin_listen_port']
-    else:
-        port = cms_config['contest_listen_port'][shard]
-    sock = socket.socket()
-    sock.connect(('127.0.0.1', port))
-    sock.close()
-
-
-def start_server(service_name, shard=0, contest=None):
-    """Start a CMS server."""
-    prog = start_servicer(service_name, check_server, shard, contest)
-    running_servers[service_name] = prog
-
-    return prog
-
-
-def check_ranking_web_server(service_name, shard):
-    """Check if RankingWebServer is up."""
-    assert service_name == "RankingWebServer"
-    assert shard is None
-    url = urlsplit(cms_config['rankings'][0])
-    sock = socket.socket()
-    sock.connect((url.hostname, url.port))
-    sock.close()
-
-
-def start_ranking_web_server():
-    """Start the RankingWebServer. It's a bit special compared to the
-    others.
+    rand (int): some random bit to add to the admin username.
 
     """
-    prog = start_servicer(
-        "RankingWebServer", check_ranking_web_server, shard=None)
-    running_servers['RankingWebServer'] = prog
-    return prog
-
-
-def shutdown_service(service_name, shard=0, contest=None):
-    rs, prog = running_services[(service_name, shard, contest)]
-
-    info("Asking %s/%d to terminate..." % (service_name, shard))
-    rs = running_services[(service_name, shard, contest)]
-    rs = RemoteService(service_name, shard)
-    rs.call("quit", {"reason": "from test harness"})
-    prog.wait()
-
-    del running_services[(service_name, shard, contest)]
-
-
-def shutdown_services():
-    for key in running_services.keys():
-        service_name, shard, contest = key
-        shutdown_service(service_name, shard, contest)
-
-    for name, server in running_servers.iteritems():
-        info("Terminating %s." % name)
-        os.kill(server.pid, signal.SIGINT)
-        server.wait()
-
-
-def combine_coverage():
-    info("Combining coverage results.")
-    sh("python -m coverage combine")
+    logger.info("Creating admin...")
+    admin_info["username"] = "admin%s" % rand
+    admin_info["password"] = "adminpwd"
+    sh(sys.executable + " cmscontrib/AddAdmin.py %(username)s -p %(password)s"
+       % admin_info)
 
 
 def admin_req(path, multipart_post=False, args=None, files=None):
-    global aws_browser
-    if aws_browser is None:
-        aws_browser = mechanize.Browser()
-        aws_browser.set_handle_robots(False)
-
     # Some requests must be forced to be multipart.
     # Do this by making files not None.
     if multipart_post and files is None:
         files = []
 
-    return cmstestsuite.web.browser_do_request(
-        aws_browser, 'http://localhost:8889' + path, args, files)
+    browser = get_aws_browser()
+    return browser_do_request(browser, AWS_BASE_URL + path, args, files)
 
 
 def get_tasks():
@@ -372,7 +202,7 @@ def get_tasks():
       'taskname' => { 'id': ..., 'title': ... }
 
     '''
-    r = admin_req('/tasks')
+    r = admin_req('tasks')
     groups = re.findall(r'''
         <tr>\s*
         <td><a\s+href="./task/(\d+)">(.*)</a></td>\s*
@@ -395,7 +225,7 @@ def get_users(contest_id):
       'username' => { 'id': ..., 'firstname': ..., 'lastname': ... }
 
     '''
-    r = admin_req('/contest/' + str(contest_id) + '/users')
+    r = admin_req('contest/' + str(contest_id) + '/users')
     groups = re.findall(r'''
         <tr> \s*
         <td> \s* (.*) \s* </td> \s*
@@ -416,34 +246,48 @@ def get_users(contest_id):
 
 
 def add_contest(**kwargs):
-    resp = admin_req('/contests/add', multipart_post=True, args=kwargs)
+    add_args = {
+        "name": kwargs.get('name'),
+        "description": kwargs.get('description'),
+    }
+    resp = admin_req('contests/add', multipart_post=True, args=add_args)
     # Contest ID is returned as HTTP response.
     page = resp.read()
     match = re.search(
         r'<form enctype="multipart/form-data" action="../contest/([0-9]+)" '
         'method="POST" name="edit_contest">',
         page)
-    if match is None:
+    if match is not None:
+        contest_id = int(match.groups()[0])
+        admin_req('contest/%s' % contest_id, multipart_post=True, args=kwargs)
+        return contest_id
+    else:
         raise FrameworkException("Unable to create contest.")
-    return int(match.groups()[0])
 
 
 def add_task(**kwargs):
-    # We need to specify token_mode. Why this and no others?
-    if 'token_mode' not in kwargs:
-        kwargs['token_mode'] = 'disabled'
-
-    r = admin_req('/tasks/add',
-                  multipart_post=True,
-                  args=kwargs)
-    g = re.search(r'/task/([0-9]+)$', r.geturl())
-    if g:
-        task_id = int(g.group(1))
+    add_args = {
+        "name": kwargs.get('name'),
+        "title": kwargs.get('title'),
+    }
+    r = admin_req('tasks/add', multipart_post=True, args=add_args)
+    response = r.read()
+    match_task_id = re.search(r'/task/([0-9]+)$', r.geturl())
+    match_dataset_id = re.search(r'/dataset/([0-9]+)', response)
+    if match_task_id and match_dataset_id:
+        task_id = int(match_task_id.group(1))
+        dataset_id = int(match_dataset_id.group(1))
+        edit_args = {}
+        for k, v in kwargs.iteritems():
+            edit_args[k.replace("{{dataset_id}}", str(dataset_id))] = v
+        r = admin_req('task/%s' % task_id,
+                      multipart_post=True,
+                      args=edit_args)
         created_tasks[task_id] = kwargs
     else:
         raise FrameworkException("Unable to create task.")
 
-    r = admin_req('/contest/' + kwargs["contest_id"] + '/tasks/add',
+    r = admin_req('contest/' + kwargs["contest_id"] + '/tasks/add',
                   multipart_post=True,
                   args={"task_id": str(task_id)})
     g = re.search('<input type="radio" name="task_id" value="' +
@@ -460,12 +304,12 @@ def add_manager(task_id, manager):
         ('manager', manager),
     ]
     dataset_id = get_task_active_dataset_id(task_id)
-    admin_req('/dataset/%d/managers/add' % dataset_id,
+    admin_req('dataset/%d/managers/add' % dataset_id,
               multipart_post=True, files=files, args=args)
 
 
 def get_task_active_dataset_id(task_id):
-    resp = admin_req('/task/%d' % task_id)
+    resp = admin_req('task/%d' % task_id)
     page = resp.read()
     match = re.search(
         r'id="title_dataset_([0-9]+).* \(Live\)</',
@@ -486,12 +330,12 @@ def add_testcase(task_id, num, input_file, output_file, public):
     if public:
         args['public'] = '1'
     dataset_id = get_task_active_dataset_id(task_id)
-    admin_req('/dataset/%d/testcases/add' % dataset_id,
+    admin_req('dataset/%d/testcases/add' % dataset_id,
               multipart_post=True, files=files, args=args)
 
 
 def add_user(**kwargs):
-    r = admin_req('/users/add', args=kwargs)
+    r = admin_req('users/add', args=kwargs)
     g = re.search(r'/user/([0-9]+)$', r.geturl())
     if g:
         user_id = int(g.group(1))
@@ -500,7 +344,7 @@ def add_user(**kwargs):
         raise FrameworkException("Unable to create user.")
 
     kwargs["user_id"] = user_id
-    r = admin_req('/contest/' + kwargs["contest_id"] + '/users/add',
+    r = admin_req('contest/' + kwargs["contest_id"] + '/users/add',
                   args=kwargs)
     g = re.search('<input type="radio" name="user_id" value="' +
                   str(user_id) + '"/>', r.read())
@@ -522,25 +366,15 @@ def add_existing_user(user_id, **kwargs):
     created_users[user_id] = kwargs
 
 
-def cws_submit(contest_id, task_id, user_id, submission_format_element,
-               filename, language):
-    username = created_users[user_id]['username']
-    password = created_users[user_id]['password']
-    base_url = 'http://localhost:8888/'
+def cws_submit(contest_id, task_id, user_id, submission_format,
+               filenames, language):
     task = (task_id, created_tasks[task_id]['name'])
 
-    global cws_browser
-    if cws_browser is None:
-        cws_browser = mechanize.Browser()
-        cws_browser.set_handle_robots(False)
-        lr = LoginRequest(cws_browser, username, password, base_url=base_url)
-        lr.step()
-
-    sr = SubmitRequest(cws_browser, task, base_url=base_url,
-                       submission_format_element=submission_format_element,
-                       filename=filename)
-    sr.step()
-
+    browser = get_cws_browser(user_id)
+    sr = SubmitRequest(browser, task, base_url=CWS_BASE_URL,
+                       submission_format=submission_format,
+                       filenames=filenames)
+    sr.execute()
     submission_id = sr.get_submission_id()
 
     if submission_id is None:
@@ -549,26 +383,21 @@ def cws_submit(contest_id, task_id, user_id, submission_format_element,
     return submission_id
 
 
-def get_evaluation_result(contest_id, submission_id, timeout=30):
-    global aws_browser
-    if aws_browser is None:
-        aws_browser = mechanize.Browser()
-        aws_browser.set_handle_robots(False)
-    base_url = 'http://localhost:8889/'
-
+def get_evaluation_result(contest_id, submission_id, timeout=60):
     WAITING_STATUSES = re.compile(
         r'Compiling\.\.\.|Evaluating\.\.\.|Scoring\.\.\.|Evaluated')
     COMPLETED_STATUS = re.compile(
         r'Compilation failed|Evaluated \(|Scored \(')
 
+    browser = get_aws_browser()
     sleep_interval = 0.1
     while timeout > 0:
         timeout -= sleep_interval
 
-        sr = AWSSubmissionViewRequest(aws_browser,
+        sr = AWSSubmissionViewRequest(browser,
                                       submission_id,
-                                      base_url=base_url)
-        sr.step()
+                                      base_url=AWS_BASE_URL)
+        sr.execute()
 
         result = sr.get_submission_info()
         status = result['status']
