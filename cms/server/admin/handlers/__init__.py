@@ -181,6 +181,7 @@ HANDLERS = [
     (r"/team/([0-9]+)", TeamHandler),
     (r"/user/([0-9]+)/add_participation", AddParticipationHandler),
     (r"/user/([0-9]+)/edit_participation", EditParticipationHandler),
+    (r"/users/import", user.ImportUsersHandler),
 
     # Admins
 
