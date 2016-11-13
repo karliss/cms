@@ -36,6 +36,7 @@ from cmscommon.datetime import make_datetime
 
 from .base import BaseHandler, SimpleHandler, require_permission
 from cmscontrib.loaders.simple_csv import CsvUserLoader
+import cmscommon.crypto
 
 import logging
 
@@ -288,7 +289,6 @@ class EditParticipationHandler(BaseHandler):
 
 class ImportUsersHandler(
         SimpleHandler("users_import.html", permission_all=True)):
-
     @require_permission(BaseHandler.PERMISSION_ALL)
     def post(self):
         fallback_page = "/users/import"
@@ -298,10 +298,13 @@ class ImportUsersHandler(
 
         if action == 'upload':
             ignore_existing = self.get_body_argument('ignore_existing', False)
+            generate_passwords = self.get_body_argument('generate_passwords',
+                                                        False)
             ignored = 0
             try:
                 user_csv = self.request.files["users_csv"][0]
-                users = CsvUserLoader(None, None, user_csv['body']).get_users()
+                users = CsvUserLoader(None, None, user_csv['body']) \
+                    .get_users(generate_passwords=generate_passwords)
                 processed_users = []
                 for user in users:
                     db_user = self.sql_session.query(User).filter_by(
@@ -343,8 +346,12 @@ class ImportUsersHandler(
                     'username': usernames[i],
                     'first_name': first_names[i],
                     'last_name': last_names[i],
-                    'password': passwords[i],
                 }
+                if passwords[i]:
+                    args['password'] = passwords[i]
+                else:
+                    args['password'] = \
+                        cmscommon.crypto.generate_random_password()
                 user = User(**args)
                 self.sql_session.add(user)
             if self.try_commit():

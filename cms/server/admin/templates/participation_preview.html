@@ -13,6 +13,9 @@
           <th>Participant</th>
           <th>Username</th>
           <th>Team</th>
+          {% if load_passwords %}
+          <th>Password</th>
+          {% end %}
         </tr>
       </thead>
       <tbody>
@@ -29,6 +32,11 @@
                 <input type="hidden" name="user_id" value="{{ u['user_id'] }}"/>
               </td>
               <td><input name='team' value="{{ u['team'] if u['team'] else '' }}"></td>
+              {% if load_passwords %}
+                <td>
+                  <input type="hidden" name="password" value="{{ u['password'] }}">{{ 'V' if u['password'] else 'X' }}
+                </td>
+              {% end %}
             {% end %}
           </tr>
         {% end %}

@@ -235,7 +235,7 @@ class MessageHandler(BaseHandler):
 
 
 class ImportParticipants(BaseHandler):
-    @require_permission(BaseHandler.AUTHENTICATED)
+    @require_permission(BaseHandler.PERMISSION_ALL)
     def get(self, contest_id):
         self.contest = self.safe_get_item(Contest, contest_id)
 
@@ -254,6 +254,7 @@ class ImportParticipants(BaseHandler):
 
         if action == 'upload':
             ignore_existing = self.get_body_argument('ignore_existing', False)
+            load_passwords = self.get_body_argument('load_passwords', False)
             try:
                 user_csv = self.request.files["users_csv"][0]
                 users = CsvUserLoader(None, None, user_csv['body']).read_users()
@@ -288,15 +289,18 @@ class ImportParticipants(BaseHandler):
                             self.application.service.add_notification(
                                 make_datetime(),
                                 'User exist', 'Some participants already exist')
-
-                    result['password'] = user.get('password')
+                    if load_passwords:
+                        result['password'] = user.get('password')
+                    else:
+                        result['password'] = None
                     processed_users.append(result)
                 r_params['users'] = processed_users
                 r_params['has_errors'] = \
                     (some_participants_exist and not ignore_existing)
+                r_params['load_passwords'] = load_passwords
                 self.render('participation_preview.html', **r_params)
                 return
-            except IndexError as error:
+            except Exception as error:
                 self.application.service.add_notification(
                     make_datetime(), "Bad csv file", repr(error))
                 self.redirect(fallback_page)
@@ -304,7 +308,7 @@ class ImportParticipants(BaseHandler):
         elif action == 'save':
             user_id = self.get_body_arguments('user_id', None)
             teams = self.get_body_arguments('team', None)
-            # passwords = self.get_body_arguments('password', None)
+            passwords = self.get_body_arguments('password', None)
             for i in range(len(user_id)):
                 user = self.safe_get_item(User, user_id[i])
                 team = None
@@ -314,9 +318,13 @@ class ImportParticipants(BaseHandler):
                     if not team:
                         team = Team(code=teams[i], name=teams[i])
                         self.sql_session.add(team)
+                password = None
+                if passwords:
+                    password = passwords[i]
                 participation = Participation(user=user,
                                               contest=self.contest,
-                                              team=team)
+                                              team=team,
+                                              password=password)
                 self.sql_session.add(participation)
             if self.try_commit():
                 # Create the user on RWS.
