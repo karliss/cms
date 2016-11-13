@@ -117,6 +117,7 @@ HANDLERS = [
     (r"/contest/([0-9]+)/users/add", AddContestUserHandler),
     (r"/contest/([0-9]+)/user/([0-9]+)", ParticipationHandler),
     (r"/contest/([0-9]+)/user/([0-9]+)/message", MessageHandler),
+    (r"/contest/([0-9]+)/users/import", contestuser.ImportParticipants),
 
     # Contest's tasks
 
