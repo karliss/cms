@@ -10,7 +10,7 @@
     <table class="bordered">
       <thead>
         <tr>
-          <th>Participant</th>
+          <th>New</th>
           <th>Username</th>
           <th>Team</th>
           {% if load_passwords %}
@@ -22,11 +22,11 @@
         {% for u in users %}
           <tr>
             {% if u['participant'] %}
-              <td>V</td>
+              <td>No</td>
               <td><a href="{{ url_root }}/contest/{{ contest.id }}/user/{{ u['user_id'] }}">{{ u['username'] }}</a></td>
               <td>{{ u['team'] if u['team'] else '' }}</td>
             {% else %}
-              <td>X</td>
+              <td>Yes</td>
               <td>
                 <a href="{{ url_root }}/user/{{ u['user_id'] }}">{{ u['username'] }}</a>
                 <input type="hidden" name="user_id" value="{{ u['user_id'] }}"/>
@@ -34,7 +34,7 @@
               <td><input name='team' value="{{ u['team'] if u['team'] else '' }}"></td>
               {% if load_passwords %}
                 <td>
-                  <input type="hidden" name="password" value="{{ u['password'] }}">{{ 'V' if u['password'] else 'X' }}
+                  <input type="hidden" name="password" value="{{ u['password'] }}">{{ u'\u2713' if u['password'] else u'\u2717' }}
                 </td>
               {% end %}
             {% end %}

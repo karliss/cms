@@ -37,7 +37,6 @@ class CsvUserLoader(UserLoader):
     """Load users from CSV file.
 
     Flexible CSV user loader.
-
     """
 
     def get_task_loader(self, taskname):
@@ -59,10 +58,7 @@ class CsvUserLoader(UserLoader):
 
     @staticmethod
     def detect(path):
-        """See docstring in class Loader.
-
-        """
-
+        """See docstring in class Loader."""
         dir_name = os.path.dirname(path)
         return os.path.exists(
             os.path.join(dir_name, CsvUserLoader.USER_FILE)) or \
@@ -70,9 +66,7 @@ class CsvUserLoader(UserLoader):
             os.path.basename(dir_name) == CsvUserLoader.USER_FILE
 
     def user_has_changed(self):
-        """See docstring in class Loader.
-
-        """
+        """See docstring in class Loader."""
         return True
 
     def set_input_file_name(self):
@@ -112,10 +106,6 @@ class CsvUserLoader(UserLoader):
         return result
 
     def get_user(self):
-        """See docstring in class Loader.
-
-        """
-
         users = self.get_users()
         users = filter(lambda user: user.username == self.user, users)
         if len(users) != 1:

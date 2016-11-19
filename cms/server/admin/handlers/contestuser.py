@@ -234,7 +234,7 @@ class MessageHandler(BaseHandler):
         self.redirect("/contest/%s/user/%s" % (self.contest.id, user.id))
 
 
-class ImportParticipants(BaseHandler):
+class ImportParticipantsHandler(BaseHandler):
     @require_permission(BaseHandler.PERMISSION_ALL)
     def get(self, contest_id):
         self.contest = self.safe_get_item(Contest, contest_id)
@@ -309,7 +309,7 @@ class ImportParticipants(BaseHandler):
             user_id = self.get_body_arguments('user_id', None)
             teams = self.get_body_arguments('team', None)
             passwords = self.get_body_arguments('password', None)
-            for i in range(len(user_id)):
+            for i in xrange(len(user_id)):
                 user = self.safe_get_item(User, user_id[i])
                 team = None
                 if teams[i]:
@@ -318,9 +318,7 @@ class ImportParticipants(BaseHandler):
                     if not team:
                         team = Team(code=teams[i], name=teams[i])
                         self.sql_session.add(team)
-                password = None
-                if passwords:
-                    password = passwords[i]
+                password = passwords[i] if passwords else None
                 participation = Participation(user=user,
                                               contest=self.contest,
                                               team=team,
@@ -330,8 +328,5 @@ class ImportParticipants(BaseHandler):
                 # Create the user on RWS.
                 self.application.service.proxy_service.reinitialize()
                 self.redirect('/contest/%s/users' % contest_id)
-                return
-            else:
-                self.redirect(fallback_page)
                 return
         self.redirect(fallback_page)

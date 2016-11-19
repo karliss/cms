@@ -327,7 +327,8 @@ class ImportUsersHandler(
                 if ignored:
                     self.application.service.add_notification(
                         make_datetime(),
-                        "User exist:", '%d users already exist' % ignored)
+                        "User exist:",
+                        '%d users already exist, ignored' % ignored)
                 r_params['users'] = processed_users
                 self.render("users_import_preview.html", **r_params)
                 return
@@ -341,7 +342,7 @@ class ImportUsersHandler(
             first_names = self.get_body_arguments('first_name', None)
             last_names = self.get_body_arguments('last_name', None)
             passwords = self.get_body_arguments('password', None)
-            for i in range(len(usernames)):
+            for i in xrange(len(usernames)):
                 args = {
                     'username': usernames[i],
                     'first_name': first_names[i],
