@@ -303,10 +303,11 @@ class ImportUsersHandler(
             ignored = 0
             try:
                 user_csv = self.request.files["users_csv"][0]
-                users = CsvUserLoader(None, None, user_csv['body']) \
-                    .get_users(generate_passwords=generate_passwords)
+                users = CsvUserLoader(None, None, user_csv['body']).get_users()
                 processed_users = []
                 for user in users:
+                    if generate_passwords or callable(user.password):
+                        user.password = None
                     db_user = self.sql_session.query(User).filter_by(
                         username=user.username).first()
                     if db_user:

@@ -86,7 +86,7 @@ class CsvUserLoader(UserLoader):
           else io.open(self.real_path, 'r', encoding='utf-8') as input_file:
             return list(csv.DictReader(input_file))
 
-    def get_users(self, generate_passwords=False):
+    def get_users(self):
         users = self.read_users()
         result = []
         for user in users:
@@ -95,8 +95,6 @@ class CsvUserLoader(UserLoader):
                     'last_name': user.get('last_name', ''),
                     'email': user.get('email', None)}
             password = user.get('password')
-            if generate_passwords:
-                password = None
             if password:
                 args['password'] = password
 
